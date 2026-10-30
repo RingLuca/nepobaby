@@ -1160,11 +1160,12 @@ do
 	doServerHop = getgenv().DoServerHop
 
 	if doServerHop == nil then
-		doServerHop = true
+		doServerHop = false
 	end
 
 	local function fn6(arg)
 		doServerHop = arg
+		getgenv().DoServerHop = arg
 
 		if arg then
 			textButton2.Text = "Serverhop: ON"
@@ -3241,33 +3242,46 @@ do
 		},
 	}
 
+	local wsStop = false
+
 	local function fn8()
 		local str = string.format([[getgenv().TimeFarmed=%d
 getgenv().SavedCarriedKills=%d
 getgenv().SavedEmotes=%d
 getgenv().SavedSessionStart=%d
 getgenv().renderEnabled=%s
+getgenv().DoServerHop=%s
 loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/main/file.lua"))()
-]], getgenv().TimeFarmed, n3, savedEmotes, savedSessionStart, tostring(getgenv().renderEnabled or false))
+]], getgenv().TimeFarmed, n3, savedEmotes, savedSessionStart, tostring(getgenv().renderEnabled or false), tostring(doServerHop or false))
 
 		pcall(queue_on_teleport, str)
 	end
 
 	local function fn9(arg)
+		if not arg or type(arg.servers) ~= "table" then
+			return nil
+		end
 		local tbl5 = {}
+		local fallback = {}
 
 		for _, server in ipairs(arg.servers) do
 			local players = server.players
 
-			if players and players >= 10 and players <= 13 and server.id ~= game.JobId then
-				table.insert(tbl5, server)
+			if players and server.id ~= game.JobId then
+				if players >= 10 and players <= 13 then
+					table.insert(tbl5, server)
+				elseif players >= 6 and players <= 15 then
+					table.insert(fallback, server)
+				end
 			end
 		end
 
-		if #tbl5 == 0 then
-			return nil
+		if #tbl5 > 0 then
+			return tbl5[math.random(1, #tbl5)]
+		elseif #fallback > 0 then
+			return fallback[math.random(1, #fallback)]
 		end
-		return tbl5[math.random(1, #tbl5)]
+		return nil
 	end
 
 	local flag9 = false
@@ -3294,6 +3308,12 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/
 		end
 		flag9 = true
 
+		pcall(function()
+			if type(fn4) == "function" then
+				fn4(false)
+			end
+		end)
+
 		while _StruglixSession:IsActive() do
 			task.wait()
 			if not (not flag6 and not flag8) then
@@ -3303,13 +3323,18 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/
 		end
 
 		if not _StruglixSession:IsActive() then
+			flag9 = false
+			flag10 = false
 			return
 		end
 
 		fn8()
-		local response = game:GetService("ReplicatedStorage"):WaitForChild("Ranked"):WaitForChild("GetServerBrowserData"):InvokeServer(unpack(tbl4))
+		local fetchOk, response = pcall(function()
+			return game:GetService("ReplicatedStorage"):WaitForChild("Ranked"):WaitForChild("GetServerBrowserData"):InvokeServer(unpack(tbl4))
+		end)
 		task.wait(2)
 		flag = false
+		wsStop = true
 
 		if getgenv().PBF_WS then
 			pcall(function()
@@ -3324,14 +3349,16 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/
 		end
 
 		spawnTracked(function()
+			local attempts = 0
 			while _StruglixSession:IsActive() do
-				print("[Struglix] Hopping ...")
+				attempts += 1
+				print("[Struglix] Hopping ... (attempt " .. attempts .. ")")
 
 				if not flag11 then
-					local fetchOk, serverData = pcall(function()
+					local fetchOk2, serverData = pcall(function()
 						return game:GetService("ReplicatedStorage"):WaitForChild("Ranked"):WaitForChild("GetServerBrowserData"):InvokeServer(unpack(tbl4))
 					end)
-					if fetchOk and serverData then
+					if fetchOk2 and serverData then
 						response = serverData
 					end
 				end
@@ -3353,9 +3380,20 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/
 						end
 					end)
 					if hopOk and hopResult ~= false then
-						print("[Struglix] Hop request sent; stopping this hop worker.")
+						print("[Struglix] Hop request sent; disconnecting session.")
+						task.delay(0.5, function()
+							_StruglixSession:Stop()
+						end)
 						return
 					end
+				end
+
+				if attempts >= 15 then
+					warn("[Struglix] Failed to hop after 15 attempts, resetting debounce.")
+					flag9 = false
+					flag10 = false
+					wsStop = false
+					return
 				end
 
 				task.wait(3)
@@ -3365,6 +3403,11 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/
 
 	textButton2.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		print("[Struglix] Hop server manually...")
+		pcall(function()
+			if type(fn4) == "function" then
+				fn4(false)
+			end
+		end)
 		flag10 = true
 		doHopServer()
 	end)(...) end end)
@@ -3661,17 +3704,17 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/
 		local n11 = 0
 		local n12 = 2
 
-		while not flag12 do
+		while not flag12 and not wsStop and _StruglixSession:IsActive() do
 			n11 += 1
 			print("[Struglix] Connecting... (attempt " .. n11 .. ")")
 			local flag13, flag14
 
 			if fn12() then
-				while flag do
+				while flag and not wsStop and _StruglixSession:IsActive() do
 					task.wait(1)
 				end
 
-				if not flag12 then
+				if not flag12 and not wsStop and _StruglixSession:IsActive() then
 					print("[Struglix] Disconnected, reconnecting in " .. n10 .. "s...")
 					task.wait(2)
 					n12 = 2
@@ -3686,17 +3729,21 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/
 					end
 				end
 			else
-				warn("[Struglix] Connect failed (attempt " .. n11 .. "), retrying in " .. n12 .. "s...")
-				task.wait(n12)
-				n12 = math.min(n12 * 2, 30)
-				flag13 = n11 >= n9
-				flag14 = flag13 and not flag
+				if not wsStop and _StruglixSession:IsActive() then
+					warn("[Struglix] Connect failed (attempt " .. n11 .. "), retrying in " .. n12 .. "s...")
+					task.wait(n12)
+					n12 = math.min(n12 * 2, 30)
+					flag13 = n11 >= n9
+					flag14 = flag13 and not flag
 
-				if flag14 then
-					warn("[Struglix] Max retries reached, giving up")
-					break
+					if flag14 then
+						warn("[Struglix] Max retries reached, giving up")
+						break
+					else
+						continue
+					end
 				else
-					continue
+					break
 				end
 			end
 
@@ -6053,21 +6100,48 @@ end)
 
 spawnTracked(function()
 	while task.wait(0.25) do
-		local character = localPlayer.Character
-		local communicate = character and character:FindFirstChild("Communicate")
+		if not _StruglixSession:IsActive() then
+			break
+		end
+		if flag3 then
+			local character = localPlayer.Character
+			local communicate = character and character:FindFirstChild("Communicate")
 
-		if communicate then
-			pcall(communicate.FireServer, communicate, { Goal = "Emote Spin" })
+			if communicate then
+				pcall(communicate.FireServer, communicate, { Goal = "Emote Spin" })
+			end
 		end
 	end
 end)
 
 spawnTracked(function()
-	while true do
-		if (#Players:GetPlayers() <= 5 or n8 >= 7) and not flag6 and not flag8 then
-			doHopServer()
+	if not game:IsLoaded() then
+		game.Loaded:Wait()
+	end
+
+	pcall(function()
+		localPlayer.OnTeleport:Connect(function()
+			_StruglixSession:Stop()
+		end)
+	end)
+
+	local joinTime = tick()
+	local HOP_INTERVAL = 15 * 60 -- 15 minutes (900 seconds)
+
+	while _StruglixSession:IsActive() do
+		task.wait(1)
+
+		local timeSinceJoin = tick() - joinTime
+		local shouldHop = false
+
+		if doServerHop and (timeSinceJoin >= HOP_INTERVAL or n8 >= 7) then
+			shouldHop = true
 		end
 
-		task.wait(1)
+		if shouldHop and not flag6 and not flag8 then
+			local reason = timeSinceJoin >= HOP_INTERVAL and "15-minute timer reached" or "7 ults reached"
+			print(string.format("[Struglix] Auto server hop triggered: %s (Time in server: %.1f mins, Ulted: %d)", reason, timeSinceJoin / 60, n8))
+			doHopServer()
+		end
 	end
 end)
