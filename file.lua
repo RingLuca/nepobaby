@@ -1,3 +1,111 @@
+-- Session controller: stop the previous copy before starting a new one.
+local _StruglixEnv = getgenv()
+local _StruglixPreviousSession = _StruglixEnv.__StruglixSessionController
+if type(_StruglixPreviousSession) == "table" and type(_StruglixPreviousSession.Stop) == "function" then
+    pcall(_StruglixPreviousSession.Stop, _StruglixPreviousSession)
+end
+
+local _StruglixRawSpawn = task.spawn
+local _StruglixRawDelay = task.delay
+local _StruglixRawDefer = task.defer
+local _StruglixRawCancel = task.cancel
+
+local _StruglixSession = {
+    Active = true,
+    Threads = {},
+}
+
+function _StruglixSession:IsActive()
+    return self.Active and _StruglixEnv.__StruglixSessionController == self
+end
+
+function _StruglixSession:Stop()
+    if not self.Active then
+        return
+    end
+
+    self.Active = false
+
+    if type(_StruglixRawCancel) == "function" then
+        for i = #self.Threads, 1, -1 do
+            local thread = self.Threads[i]
+            pcall(_StruglixRawCancel, thread)
+        end
+    end
+    table.clear(self.Threads)
+
+    local oldSocket = _StruglixEnv.PBF_WS
+    if oldSocket then
+        pcall(function()
+            oldSocket:Close()
+        end)
+        _StruglixEnv.PBF_WS = nil
+    end
+
+    _StruglixEnv.desync = nil
+
+    pcall(function()
+        local coreGui = game:GetService("CoreGui")
+        local oldGui = coreGui:FindFirstChild("StruglixUI")
+        if oldGui then
+            oldGui:Destroy()
+        end
+    end)
+end
+
+_StruglixEnv.__StruglixSessionController = _StruglixSession
+
+local function _StruglixRememberThread(thread)
+    for i = #_StruglixSession.Threads, 1, -1 do
+        local oldThread = _StruglixSession.Threads[i]
+        local ok, status = pcall(coroutine.status, oldThread)
+        if ok and status == "dead" then
+            table.remove(_StruglixSession.Threads, i)
+        end
+    end
+    table.insert(_StruglixSession.Threads, thread)
+    return thread
+end
+
+local function spawnTracked(callback, ...)
+    if not _StruglixSession:IsActive() then
+        return nil
+    end
+    local args = table.pack(...)
+    local thread = _StruglixRawSpawn(function()
+        if _StruglixSession:IsActive() then
+            callback(table.unpack(args, 1, args.n))
+        end
+    end)
+    return _StruglixRememberThread(thread)
+end
+
+local function delayTracked(seconds, callback, ...)
+    if not _StruglixSession:IsActive() then
+        return nil
+    end
+    local args = table.pack(...)
+    local thread = _StruglixRawDelay(seconds, function()
+        if _StruglixSession:IsActive() then
+            callback(table.unpack(args, 1, args.n))
+        end
+    end)
+    return _StruglixRememberThread(thread)
+end
+
+local function deferTracked(callback, ...)
+    if not _StruglixSession:IsActive() then
+        return nil
+    end
+    local args = table.pack(...)
+    local thread = _StruglixRawDefer(function()
+        if _StruglixSession:IsActive() then
+            callback(table.unpack(args, 1, args.n))
+        end
+    end)
+    return _StruglixRememberThread(thread)
+end
+
 local STRUGLIX_LOGO_URL = "https://raw.githubusercontent.com/Struglix/RawsShare/refs/heads/main/logo.png"
 local STRUGLIX_LOGO_FILE = "Uhhhtpyfy0422.png"
 
@@ -240,9 +348,9 @@ do
 	tbl2[#tbl2 + 1] = function()
 		local n2 = 0
 
-		local connection = game:GetService("RunService").Heartbeat:Connect(function()
+		local connection = game:GetService("RunService").Heartbeat:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			n2 += 1
-		end)
+		end)(...) end end)
 
 		local n3 = 0
 
@@ -352,7 +460,7 @@ local RunService
 RunService = game:GetService("RunService")
 local flag2 = true
 
-task.spawn(function()
+spawnTracked(function()
 	local tbl = { "ParticleEmitter", "Trail", "Beam", "Fire", "Smoke", "Sparkles", "Explosion", "Sound" }
 
 	local tbl2 = {
@@ -386,7 +494,7 @@ task.spawn(function()
 
 	local function fn2(descendant)
 		if fn(descendant) then
-			task.defer(function()
+			deferTracked(function()
 				if descendant and descendant.Parent then
 					descendant:Destroy()
 				end
@@ -394,7 +502,7 @@ task.spawn(function()
 		end
 	end
 
-	workspace.DescendantAdded:Connect(fn2)
+	workspace.DescendantAdded:Connect(function(...) if _StruglixSession:IsActive() then return (fn2)(...) end end)
 
 	for _, v in workspace:GetDescendants() do
 		fn2(v)
@@ -610,7 +718,7 @@ do
 	uiGradient.Offset = Vector2.new(-1, 0)
 	uiGradient.Parent = frame2
 
-	task.spawn(function()
+	spawnTracked(function()
 		local tweenInfo = TweenInfo.new(4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
 		while true do
@@ -762,7 +870,7 @@ do
 	uiGradient.Parent = textLabel4
 	createUIStroke(textLabel4, flag2 and Color3.fromRGB(120, 220, 255) or Color3.fromRGB(100, 240, 140), 1, 0.5)
 
-	task.spawn(function()
+	spawnTracked(function()
 		local tweenInfo = TweenInfo.new(2.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
 		while textLabel4.Parent do
@@ -988,13 +1096,13 @@ do
 		scrollingFrame.Size = UDim2.new(1, 0, 0, math.min(#tbl, 5) * n3)
 	end
 
-	textButton.MouseButton1Click:Connect(function()
+	textButton.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		if flag4 then
 			fn4()
 		else
 			fn5()
 		end
-	end)
+	end)(...) end end)
 
 	for i, v2 in ipairs(tbl) do
 		local textButton2 = Instance.new("TextButton")
@@ -1011,12 +1119,12 @@ do
 		textButton2.ZIndex = 201
 		textButton2.Parent = scrollingFrame
 
-		textButton2.MouseButton1Click:Connect(function()
+		textButton2.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			v.country = v2
 			textLabel4.Text = v2
 			fn4()
 			fn()
-		end)
+		end)(...) end end)
 	end
 
 	local frame6 = Instance.new("Frame")
@@ -1067,9 +1175,9 @@ do
 		end
 	end
 
-	textButton2.MouseButton1Click:Connect(function()
+	textButton2.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		fn6(not doServerHop)
-	end)
+	end)(...) end end)
 
 	fn6(doServerHop)
 end
@@ -1107,10 +1215,10 @@ do
 	fn3(textBox, 8)
 	createUIStroke(textBox, Color3.fromRGB(80, 80, 90), 1, 0.7)
 
-	textBox:GetPropertyChangedSignal("Text"):Connect(function()
+	textBox:GetPropertyChangedSignal("Text"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		v.webhookUrl = textBox.Text
 		fn()
-	end)
+	end)(...) end end)
 
 	local uiPadding = Instance.new("UIPadding")
 	uiPadding.PaddingLeft = UDim.new(0, 12)
@@ -1131,13 +1239,13 @@ end
 fn3(textButton, 8)
 createUIStroke(textButton, Color3.fromRGB(80, 80, 90), 1, 0.7)
 
-textButton.MouseEnter:Connect(function()
+textButton.MouseEnter:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 	fn2(textButton, { BackgroundColor3 = Color3.fromRGB(30, 30, 38) }, 0.15)
-end)
+end)(...) end end)
 
-textButton.MouseLeave:Connect(function()
+textButton.MouseLeave:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 	fn2(textButton, { BackgroundColor3 = Color3.fromRGB(20, 20, 26) }, 0.15)
-end)
+end)(...) end end)
 
 local fn4
 
@@ -1173,25 +1281,25 @@ do
 		end
 	end
 
-	textButton2.MouseButton1Click:Connect(function()
+	textButton2.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		fn4(not flag3)
-	end)
+	end)(...) end end)
 
-	textButton2.MouseEnter:Connect(function()
+	textButton2.MouseEnter:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		if flag3 then
 			fn2(textButton2, { BackgroundColor3 = Color3.fromRGB(200, 60, 60) }, 0.15)
 		else
 			fn2(textButton2, { BackgroundColor3 = Color3.fromRGB(70, 220, 140) }, 0.15)
 		end
-	end)
+	end)(...) end end)
 
-	textButton2.MouseLeave:Connect(function()
+	textButton2.MouseLeave:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		if flag3 then
 			fn2(textButton2, { BackgroundColor3 = Color3.fromRGB(220, 80, 80) }, 0.15)
 		else
 			fn2(textButton2, { BackgroundColor3 = Color3.fromRGB(50, 200, 120) }, 0.15)
 		end
-	end)
+	end)(...) end end)
 end
 
 fn4(flag3)
@@ -1224,13 +1332,13 @@ do
 	fn3(textButton2, 9)
 	createUIStroke(textButton2, Color3.fromRGB(80, 80, 90), 1, 0.7)
 
-	textButton2.MouseEnter:Connect(function()
+	textButton2.MouseEnter:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		fn2(textButton2, { BackgroundColor3 = Color3.fromRGB(35, 35, 45) }, 0.15)
-	end)
+	end)(...) end end)
 
-	textButton2.MouseLeave:Connect(function()
+	textButton2.MouseLeave:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		fn2(textButton2, { BackgroundColor3 = Color3.fromRGB(25, 25, 32) }, 0.15)
-	end)
+	end)(...) end end)
 
 	local textButton3 = Instance.new("TextButton")
 	textButton3.Size = UDim2.new(0.33333333333333331, -5, 1, 0)
@@ -1268,9 +1376,9 @@ do
 		end
 	end
 
-	textButton3.MouseButton1Click:Connect(function()
+	textButton3.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		fn5(not renderEnabled)
-	end)
+	end)(...) end end)
 
 	fn5(getgenv().renderEnabled ~= nil and getgenv().renderEnabled or false)
 end
@@ -1303,7 +1411,7 @@ for _, descendant in ipairs(frame2:GetDescendants()) do
 	end
 end
 
-task.spawn(function()
+spawnTracked(function()
 	fn2(frame, { BackgroundTransparency = 0 }, 0.5)
 	task.wait(0.05)
 	fn2(imageLabel, { ImageTransparency = 0 }, 0.4)
@@ -1330,7 +1438,7 @@ task.spawn(function()
 	end
 
 	for i, v3 in ipairs(tbl4) do
-		task.spawn(function()
+		spawnTracked(function()
 			task.wait((i - 1) * 0.015)
 			fn2(v3, { TextTransparency = 0 }, 0.35)
 		end)
@@ -1356,16 +1464,16 @@ do
 
 	fn5()
 
-	workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		fn5()
 
 		if workspace.CurrentCamera then
-			workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fn5)
+			workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function(...) if _StruglixSession:IsActive() then return (fn5)(...) end end)
 		end
-	end)
+	end)(...) end end)
 
 	if workspace.CurrentCamera then
-		workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fn5)
+		workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function(...) if _StruglixSession:IsActive() then return (fn5)(...) end end)
 	end
 end
 
@@ -1388,7 +1496,7 @@ local function fn5()
 	end)
 end
 
-task.spawn(function()
+spawnTracked(function()
 	fn5()
 
 	while true do
@@ -1500,16 +1608,16 @@ do
 		return ok, result
 	end
 
-	textButton.MouseButton1Click:Connect(fn6)
+	textButton.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (fn6)(...) end end)
 	workspace.FallenPartsDestroyHeight = (0/0)
 
-	workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
+	workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		local fallenPartsDestroyHeight = workspace.FallenPartsDestroyHeight
 
 		if fallenPartsDestroyHeight == fallenPartsDestroyHeight then
 			workspace.FallenPartsDestroyHeight = (0/0)
 		end
-	end)
+	end)(...) end end)
 
 	local part = Instance.new("Part", workspace)
 	part.CFrame = CFrame.new(0, -510, 0)
@@ -1543,30 +1651,30 @@ do
 			connection2 = nil
 		end
 
-		connection2 = RunService.RenderStepped:Connect(function()
+		connection2 = RunService.RenderStepped:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
 
 			if humanoidRootPart2 then
 				health = humanoid.Health
 				part.CFrame = CFrame.new(humanoidRootPart2.Position.X, -510, humanoidRootPart2.Position.Z)
 			end
-		end)
+		end)(...) end end)
 
-		connection = humanoid.HealthChanged:Connect(function(health2)
+		connection = humanoid.HealthChanged:Connect(function(...) if _StruglixSession:IsActive() then return (function(health2)
 			local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
 
 			if health2 <= 0 and humanoidRootPart2 and humanoidRootPart2.CFrame.Y <= 0 then
 				humanoid.Health = health
 			end
-		end)
+		end)(...) end end)
 	end
 
 	fn8(localPlayer.Character)
 
-	localPlayer.CharacterAdded:Connect(function(character)
+	localPlayer.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
 		task.wait(0.1)
 		fn8(character)
-	end)
+	end)(...) end end)
 
 	local tbl4 = {}
 	local obj = setmetatable({}, { __mode = "k" })
@@ -1597,21 +1705,21 @@ do
 		end
 		createFolder(arg)
 
-		local connection3 = arg.ChildRemoved:Connect(function(child)
+		local connection3 = arg.ChildRemoved:Connect(function(...) if _StruglixSession:IsActive() then return (function(child)
 			if child.Name == "MovingExclusion" then
-				task.defer(createFolder, arg)
+				deferTracked(createFolder, arg)
 			end
-		end)
+		end)(...) end end)
 
 		table.insert(tbl4, connection3)
 	end
 
 	fn9(localPlayer.Character)
 
-	table.insert(tbl4, localPlayer.CharacterAdded:Connect(function(character)
+	table.insert(tbl4, localPlayer.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
 		task.wait(0.1)
 		fn9(character)
-	end))
+	end)(...) end end))
 
 	local flag10 = false
 	local v3 = nil
@@ -1723,7 +1831,7 @@ do
 		end
 		arg.LocalTransparencyModifier = 0.5
 
-		local connection3 = arg:GetPropertyChangedSignal("LocalTransparencyModifier"):Connect(function()
+		local connection3 = arg:GetPropertyChangedSignal("LocalTransparencyModifier"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			if not flag11 then
 				return
 			end
@@ -1731,7 +1839,7 @@ do
 			if arg.LocalTransparencyModifier ~= 0.5 then
 				arg.LocalTransparencyModifier = 0.5
 			end
-		end)
+		end)(...) end end)
 
 		table.insert(tbl5, connection3)
 	end
@@ -1741,11 +1849,11 @@ do
 			fn12(descendant)
 		end
 
-		local connection3 = arg.DescendantAdded:Connect(function(descendant)
+		local connection3 = arg.DescendantAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(descendant)
 			if flag11 then
 				fn12(descendant)
 			end
-		end)
+		end)(...) end end)
 
 		table.insert(tbl5, connection3)
 	end
@@ -1774,7 +1882,7 @@ do
 		end
 	end
 
-	RunService.Heartbeat:Connect(function()
+	RunService.Heartbeat:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		if not flag3 then
 			return
 		end
@@ -1802,7 +1910,7 @@ do
 
 		if humanoid2.Health <= 0 then
 			if flag11 then
-				task.spawn(fn11)
+				spawnTracked(fn11)
 			end
 
 			flag10 = false
@@ -1917,11 +2025,11 @@ do
 
 		humanoidRootPart.Velocity = velocity
 		flag10 = false
-	end)
+	end)(...) end end)
 
 	fn14()
 
-	task.spawn(function()
+	spawnTracked(function()
 		local function fn15(arg)
 			while true do
 				task.wait()
@@ -1936,7 +2044,7 @@ do
 			end
 			local humanoidRootPart = arg:FindFirstChild("HumanoidRootPart")
 
-			task.spawn(function()
+			spawnTracked(function()
 				while task.wait() and (not localPlayer.Character or localPlayer.Character == arg) do
 					if getgenv().desync and not arg:FindFirstChild("AbsoluteImmortal") then
 						local tbl6 = {}
@@ -1989,10 +2097,10 @@ do
 				end
 			end)
 
-			task.spawn(function()
+			spawnTracked(function()
 				for _, descendant in pairs(arg:GetDescendants()) do
 					if descendant:IsA("BasePart") and descendant ~= humanoidRootPart and descendant.Transparency ~= 1 and not descendant.Name:lower():find("hitbox") then
-						task.spawn(function()
+						spawnTracked(function()
 							while task.wait() and (not localPlayer.Character or localPlayer.Character == arg) do
 								if descendant and (flag11 or getgenv().desync and not arg:FindFirstChild("AbsoluteImmortal")) then
 									descendant.Transparency = 0.5
@@ -2025,12 +2133,12 @@ do
 		end
 
 		if localPlayer.Character then
-			task.spawn(fn15, localPlayer.Character)
+			spawnTracked(fn15, localPlayer.Character)
 		end
 
-		localPlayer.CharacterAdded:Connect(function(character)
-			task.spawn(fn15, character)
-		end)
+		localPlayer.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
+			spawnTracked(fn15, character)
+		end)(...) end end)
 	end)
 
 	local Lighting = game:GetService("Lighting")
@@ -2039,7 +2147,7 @@ do
 
 	local function fn15(arg, arg2)
 		pcall(function()
-			arg:Connect(arg2)
+			arg:Connect(function(...) if _StruglixSession:IsActive() then return (arg2)(...) end end)
 		end)
 	end
 
@@ -2181,7 +2289,7 @@ do
 		end,
 	}
 
-	task.spawn(function()
+	spawnTracked(function()
 		local tbl7 = { 1, 2, 3, 4, 5, 6 }
 
 		while #tbl7 > 0 do
@@ -2294,10 +2402,10 @@ do
 	local function fn21(arg)
 		local humanoid2 = arg:WaitForChild("Humanoid")
 
-		arg.DescendantAdded:Connect(function(descendant)
+		arg.DescendantAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(descendant)
 			if descendant.Name == "Ragdoll" or descendant.Name == "RagdollSim" then
 				if not flag12 and humanoid2.Health > 0 and not arg:FindFirstChild("ExtraHitbox") then
-					task.spawn(function()
+					spawnTracked(function()
 						while true do
 							flag12 = true
 							getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
@@ -2313,9 +2421,9 @@ do
 					end)
 				end
 			end
-		end)
+		end)(...) end end)
 
-		task.spawn(function()
+		spawnTracked(function()
 			local playerGui = localPlayer:WaitForChild("PlayerGui")
 			if not playerGui then
 				return
@@ -2341,20 +2449,20 @@ do
 				return
 			end
 
-			base.ChildAdded:Connect(function(child)
+			base.ChildAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(child)
 				if child.Name == "Cooldown" and localPlayer.Character:GetAttribute("Ulted") then
-					task.spawn(function()
+					spawnTracked(function()
 						flag9 = true
 						task.wait(0.05)
 						flag9 = false
 					end)
 				end
-			end)
+			end)(...) end end)
 		end)
 
 		local tbl7 = { ["18464351556"] = true, ["18464372850"] = true, ["136370737633649"] = true }
 
-		humanoid2.AnimationPlayed:Connect(function(arg2)
+		humanoid2.AnimationPlayed:Connect(function(...) if _StruglixSession:IsActive() then return (function(arg2)
 			local animationId = arg2.Animation.AnimationId
 			if tbl7[animationId:match("%d+")] then
 				v2 = fn7()
@@ -2377,7 +2485,7 @@ do
 			local function fn23(arg3)
 				local v6 = nil
 
-				return (RunService.Heartbeat:Connect(function()
+				return (RunService.Heartbeat:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 					if not arg3() then
 						v6:Disconnect()
 						return
@@ -2388,7 +2496,7 @@ do
 						v7.AssemblyLinearVelocity = Vector3.new()
 						v7.AssemblyAngularVelocity = Vector3.new()
 					end
-				end))
+				end)(...) end end))
 			end
 
 			local connection3 = nil
@@ -2489,13 +2597,13 @@ do
 				local humanoid3 = arg3.Parent and arg3.Parent:FindFirstChildOfClass("Humanoid")
 
 				if humanoid3 then
-					connection4 = RunService.RenderStepped:Connect(function()
+					connection4 = RunService.RenderStepped:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 						if humanoid3 and humanoid3.Parent then
 							pcall(function()
 								humanoid3.AutoRotate = false
 							end)
 						end
-					end)
+					end)(...) end end)
 				end
 
 				arg3.CFrame = CFrame.new(0, 0, 5)
@@ -2514,7 +2622,7 @@ do
 
 				local v8 = nil
 
-				connection3 = RunService.Heartbeat:Connect(function()
+				connection3 = RunService.Heartbeat:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 					if not arg3 or not arg3.Parent or not arg4 or not arg4.Parent then
 						v8:Disconnect()
 
@@ -2561,7 +2669,7 @@ do
 							sethiddenproperty(arg3, "PhysicsRepRootPart", arg4)
 						end)
 					end
-				end)
+				end)(...) end end)
 			end
 
 			if animationId:match("18896229321") then
@@ -2573,7 +2681,7 @@ do
 				getgenv().desync = nil
 				flag8 = true
 
-				task.spawn(function()
+				spawnTracked(function()
 					local v8 = fn16(localPlayer)
 					if not v8 then
 						return
@@ -2609,7 +2717,7 @@ do
 						v9 = fn28()
 					end
 
-					task.spawn(function()
+					spawnTracked(function()
 						while true do
 							task.wait()
 							v9 = fn28()
@@ -2906,7 +3014,7 @@ do
 								if v14 then
 									local animator = v14:FindFirstChildOfClass("Animator")
 
-									connection5 = (animator and animator.AnimationPlayed or v14.AnimationPlayed):Connect(function(arg4)
+									connection5 = (animator and animator.AnimationPlayed or v14.AnimationPlayed):Connect(function(...) if _StruglixSession:IsActive() then return (function(arg4)
 										local animationId2 = arg4.Animation.AnimationId
 
 										if animationId2:match("18896222853") or animationId2:match("137434257516014") then
@@ -2938,19 +3046,19 @@ do
 												fn40()
 											end
 										end
-									end)
+									end)(...) end end)
 								end
 							end
 						end
 					end
 
-					workspace.Live.ChildAdded:Connect(function(child)
+					workspace.Live.ChildAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(child)
 						if child.Name == "Weakest Dummy" then
 							tbl8[child] = nil
 						end
-					end)
+					end)(...) end end)
 
-					RunService.RenderStepped:Connect(function()
+					RunService.RenderStepped:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 						for _, v12 in pairs(fn19()) do
 							if tbl8[v12] then
 								local v13 = fn16(v12)
@@ -2965,7 +3073,7 @@ do
 								end
 							end
 						end
-					end)
+					end)(...) end end)
 
 					local v12 = fn37(nil)
 
@@ -3043,10 +3151,10 @@ do
 					fn40()
 				end)
 			end
-		end)
+		end)(...) end end)
 	end
 
-	task.spawn(function()
+	spawnTracked(function()
 		local totalKills = leaderstats:WaitForChild("Total Kills")
 		local attribute = localPlayer:GetAttribute("LastEmoteSpin")
 		local value = totalKills.Value
@@ -3058,17 +3166,6 @@ do
 			n3 = n6 - n5
 			n7 = n6 - value
 
-			-- Reset character every 9 session kills
-			if n7 >= (getgenv().NextResetKill or 9) then
-				getgenv().NextResetKill = n7 + 9
-
-				local character = localPlayer.Character
-				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-				if humanoid and humanoid.Health > 0 then
-					humanoid.Health = 0
-				end
-			end
 
 			local attribute2 = localPlayer:GetAttribute("LastEmoteSpin")
 
@@ -3085,7 +3182,7 @@ do
 		end
 	end)
 
-	task.spawn(function()
+	spawnTracked(function()
 		while true do
 			if flag3 then
 				local genv = getgenv()
@@ -3098,27 +3195,27 @@ do
 		end
 	end)
 
-	localPlayer.CharacterAdded:Connect(function(character)
+	localPlayer.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
 		task.wait(0.5)
 		fn21(character)
 
-		character:GetAttributeChangedSignal("Ulted"):Connect(function()
+		character:GetAttributeChangedSignal("Ulted"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			if localPlayer.Character:GetAttribute("Ulted") then
 				n8 += 1
 				print("[Struglix] Ulted detected, time ulted: " .. tostring(n8))
 			end
-		end)
-	end)
+		end)(...) end end)
+	end)(...) end end)
 
 	if localPlayer.Character then
 		fn21(localPlayer.Character)
 
-		localPlayer.Character:GetAttributeChangedSignal("Ulted"):Connect(function()
+		localPlayer.Character:GetAttributeChangedSignal("Ulted"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			if localPlayer.Character:GetAttribute("Ulted") then
 				n8 += 1
 				print("[Struglix] Ulted detected, time ulted: " .. tostring(n8))
 			end
-		end)
+		end)(...) end end)
 	end
 end
 
@@ -3150,7 +3247,7 @@ getgenv().SavedCarriedKills=%d
 getgenv().SavedEmotes=%d
 getgenv().SavedSessionStart=%d
 getgenv().renderEnabled=%s
-loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/RingLuca/StruglixLua/main/file.lua"))()
 ]], getgenv().TimeFarmed, n3, savedEmotes, savedSessionStart, tostring(getgenv().renderEnabled or false))
 
 		pcall(queue_on_teleport, str)
@@ -3178,6 +3275,10 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 	local flag11 = false
 
 	doHopServer = function()
+		if not _StruglixSession:IsActive() then
+			return
+		end
+
 		local flag12 = not flag11 and not flag10
 
 		if flag12 then
@@ -3193,12 +3294,16 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 		end
 		flag9 = true
 
-		while true do
+		while _StruglixSession:IsActive() do
 			task.wait()
 			if not (not flag6 and not flag8) then
 				continue
 			end
 			break
+		end
+
+		if not _StruglixSession:IsActive() then
+			return
 		end
 
 		fn8()
@@ -3218,23 +3323,26 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 			localPlayer:Kick("[Struglix] Kicked by force-hop system.")
 		end
 
-		task.spawn(function()
-			while true do
+		spawnTracked(function()
+			while _StruglixSession:IsActive() do
 				print("[Struglix] Hopping ...")
 
 				if not flag11 then
-					response = game:GetService("ReplicatedStorage"):WaitForChild("Ranked"):WaitForChild("GetServerBrowserData"):InvokeServer(unpack(tbl4))
+					local fetchOk, serverData = pcall(function()
+						return game:GetService("ReplicatedStorage"):WaitForChild("Ranked"):WaitForChild("GetServerBrowserData"):InvokeServer(unpack(tbl4))
+					end)
+					if fetchOk and serverData then
+						response = serverData
+					end
 				end
 
 				local v3 = fn9(response)
 
 				if v3 then
-					if stafforcehop then
-						pcall(function()
+					local hopOk, hopResult = pcall(function()
+						if stafforcehop then
 							TeleportService:TeleportToPlaceInstance(game.PlaceId, v3.id, localPlayer)
-						end)
-					else
-						pcall(function()
+						else
 							game:GetService("ReplicatedStorage"):WaitForChild("Ranked"):WaitForChild("CustomServerHandler"):InvokeServer({
 								Action = "JoinServer",
 								JobId = v3.id,
@@ -3242,7 +3350,11 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 								JoinCode = v3.joinCode or "",
 								Password = nil,
 							})
-						end)
+						end
+					end)
+					if hopOk and hopResult ~= false then
+						print("[Struglix] Hop request sent; stopping this hop worker.")
+						return
 					end
 				end
 
@@ -3251,11 +3363,11 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 		end)
 	end
 
-	textButton2.MouseButton1Click:Connect(function()
+	textButton2.MouseButton1Click:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		print("[Struglix] Hop server manually...")
 		flag10 = true
 		doHopServer()
-	end)
+	end)(...) end end)
 
 	local tbl5 = {
 		422755031,
@@ -3390,12 +3502,12 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 		if not totalKills then
 			local connection = nil
 
-			connection = arg.ChildAdded:Connect(function(child)
+			connection = arg.ChildAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(child)
 				if child.Name == "leaderstats" then
 					connection:Disconnect()
 					local connection2 = nil
 
-					connection2 = child.ChildAdded:Connect(function(child2)
+					connection2 = child.ChildAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(child2)
 						if child2.Name == "Total Kills" then
 							connection2:Disconnect()
 							if child2.Value >= 30000 then
@@ -3404,37 +3516,37 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 							end
 							local connection3 = nil
 
-							connection3 = child2:GetPropertyChangedSignal("Value"):Connect(function()
+							connection3 = child2:GetPropertyChangedSignal("Value"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 								if child2.Value >= 30000 then
 									connection3:Disconnect()
 									doHopServer()
 								end
-							end)
+							end)(...) end end)
 						end
-					end)
+					end)(...) end end)
 				end
-			end)
+			end)(...) end end)
 
 			return
 		end
 
 		local connection = nil
 
-		connection = totalKills:GetPropertyChangedSignal("Value"):Connect(function()
+		connection = totalKills:GetPropertyChangedSignal("Value"):Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			if totalKills.Value >= 30000 then
 				connection:Disconnect()
 				doHopServer()
 			end
-		end)
+		end)(...) end end)
 	end
 
-	Players.PlayerAdded:Connect(function(player)
-		task.spawn(pcall, fn10, player)
-	end)
+	Players.PlayerAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(player)
+		spawnTracked(pcall, fn10, player)
+	end)(...) end end)
 
 	for _, player in pairs(Players:GetPlayers()) do
 		if player ~= localPlayer then
-			task.spawn(pcall, fn10, player)
+			spawnTracked(pcall, fn10, player)
 		end
 	end
 
@@ -3535,17 +3647,17 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 		end
 		flag = true
 		print("[Struglix] Server connected")
-		getgenv().PBF_WS.OnMessage:Connect(fn11)
+		getgenv().PBF_WS.OnMessage:Connect(function(...) if _StruglixSession:IsActive() then return (fn11)(...) end end)
 
-		getgenv().PBF_WS.OnClose:Connect(function()
+		getgenv().PBF_WS.OnClose:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			flag = false
 			print("[Struglix] Server closed")
-		end)
+		end)(...) end end)
 
 		return true
 	end
 
-	task.spawn(function()
+	spawnTracked(function()
 		local n11 = 0
 		local n12 = 2
 
@@ -3666,17 +3778,17 @@ loadstring(game:HttpGet("https://vault.pandauth.com/vss/0cff6a075be18027"))()
 		end
 	end
 
-	task.spawn(function()
+	spawnTracked(function()
 		print("[ZKClanScan] Scanning server...")
 		local v3 = fn13()
 		fn14(v3)
 
-		Players2.PlayerAdded:Connect(function()
+		Players2.PlayerAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			task.wait(1)
 			print("[ZKClanScan] New player joined, rescanning...")
 			local v4 = fn13()
 			fn14(v4)
-		end)
+		end)(...) end end)
 	end)
 end
 
@@ -3705,7 +3817,7 @@ do
 			return
 		end
 
-		task.spawn(function()
+		spawnTracked(function()
 			RunService.RenderStepped:Once(function()
 				humanoidRootPart.Velocity = Vector3.new()
 				RunService.Heartbeat:Wait()
@@ -3767,13 +3879,13 @@ do
 			return
 		end
 
-		connection = arg.AnimationPlayed:Connect(function(arg2)
+		connection = arg.AnimationPlayed:Connect(function(...) if _StruglixSession:IsActive() then return (function(arg2)
 			if not arg2.Animation.AnimationId:match("11343250001") then
 				return
 			end
 			flag9 = true
 
-			task.spawn(function()
+			spawnTracked(function()
 				task.wait(0.2)
 				local v3 = fn8()
 				local flag11 = v3 <= 0
@@ -3784,7 +3896,7 @@ do
 					end)
 				end
 
-				task.spawn(fn11)
+				spawnTracked(fn11)
 				local character = localPlayer.Character
 				character:WaitForChild("AbsoluteImmortal", 1)
 				local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
@@ -3819,7 +3931,7 @@ do
 					humanoid.Health = 100
 					character2 = humanoid
 
-					task.delay(v3 + 2, function()
+					delayTracked(v3 + 2, function()
 						humanoid.Health = 0
 					end)
 				end
@@ -3882,10 +3994,10 @@ do
 					end
 				end
 
-				task.spawn(fn11)
+				spawnTracked(fn11)
 				flag9 = false
 			end)
-		end)
+		end)(...) end end)
 	end
 
 	local function fn14(arg)
@@ -3897,7 +4009,7 @@ do
 		if humanoid then
 			fn13(humanoid)
 		else
-			task.spawn(function()
+			spawnTracked(function()
 				local humanoid2 = arg:WaitForChild("Humanoid", 5)
 
 				if humanoid2 then
@@ -3909,10 +4021,10 @@ do
 
 	fn14(localPlayer.Character)
 
-	localPlayer.CharacterAdded:Connect(function(character)
+	localPlayer.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
 		task.wait(0.1)
 		fn14(character)
-	end)
+	end)(...) end end)
 
 	local function fn15(arg, arg2)
 		if not arg or not arg2 or arg2 == localPlayer then
@@ -3938,7 +4050,7 @@ do
 			end
 		end
 
-		local connection2 = arg.ChildAdded:Connect(function(child)
+		local connection2 = arg.ChildAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(child)
 			if not flag10 then
 				return
 			end
@@ -3951,7 +4063,7 @@ do
 				return
 			end
 			deathCounterDebounce[arg2] = true
-		end)
+		end)(...) end end)
 
 		table.insert(deathCounterConns, connection2)
 	end
@@ -3962,16 +4074,16 @@ do
 		end
 
 		if arg.Character then
-			task.spawn(fn15, arg.Character, arg)
+			spawnTracked(fn15, arg.Character, arg)
 		end
 
-		local connection2 = arg.CharacterAdded:Connect(function(character)
+		local connection2 = arg.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
 			if not flag10 then
 				return
 			end
 			task.wait(0.1)
 			fn15(character, arg)
-		end)
+		end)(...) end end)
 
 		table.insert(deathCounterConns, connection2)
 	end
@@ -3984,18 +4096,18 @@ do
 		fn16(player)
 	end
 
-	table.insert(deathCounterConns, Players.PlayerAdded:Connect(function(player)
+	table.insert(deathCounterConns, Players.PlayerAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(player)
 		if flag10 then
 			fn16(player)
 		end
-	end))
+	end)(...) end end))
 
 	local tbl4 = {}
 	local tbl5 = {}
 
-	localPlayer.CharacterAdded:Connect(function()
+	localPlayer.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 		getgenv().desync = nil
-	end)
+	end)(...) end end)
 
 	isCountering = function(arg)
 		if not arg then
@@ -4058,7 +4170,7 @@ do
 			return nil
 		end
 
-		tbl4[arg] = humanoid.AnimationPlayed:Connect(function(arg3)
+		tbl4[arg] = humanoid.AnimationPlayed:Connect(function(...) if _StruglixSession:IsActive() then return (function(arg3)
 			local animationId = arg3.Animation.AnimationId
 			local character = localPlayer.Character
 			local humanoidRootPart2 = character and character:FindFirstChild("HumanoidRootPart")
@@ -4066,7 +4178,7 @@ do
 				return
 			end
 
-			task.spawn(function()
+			spawnTracked(function()
 				if arg3.WeightTarget == 0 or arg3.Speed == 0 then
 					return
 				end
@@ -4126,17 +4238,17 @@ do
 					part.Transparency = 1
 					local flag11 = false
 
-					local connection2 = part.Touched:Connect(function(hit)
+					local connection2 = part.Touched:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 							flag11 = true
 						end
-					end)
+					end)(...) end end)
 
-					local connection3 = part.TouchEnded:Connect(function(hit)
+					local connection3 = part.TouchEnded:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 							flag11 = false
 						end
-					end)
+					end)(...) end end)
 
 					return part, function()
 						return flag11
@@ -4159,7 +4271,7 @@ do
 				end
 
 				if animationId:match("12983333733") and arg2:GetAttribute("Ulted") ~= nil then
-					task.delay(1, function()
+					delayTracked(1, function()
 						if arg2:FindFirstChild("AbsoluteImmortal", true) and arg2:FindFirstChild("Freeze") then
 							task.wait(4.25)
 							local now = tick()
@@ -4183,7 +4295,7 @@ do
 				end
 
 				if animationId:match("11365563255") and arg2:GetAttribute("Ulted") ~= nil then
-					task.delay(1, function()
+					delayTracked(1, function()
 						if arg2:FindFirstChild("AbsoluteImmortal", true) and arg2:FindFirstChild("Freeze") then
 							task.wait(3)
 							local now = tick()
@@ -4382,7 +4494,7 @@ do
 
 					local connection2 = nil
 
-					connection2 = workspace.Thrown.ChildAdded:Connect(function(child)
+					connection2 = workspace.Thrown.ChildAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(child)
 						if child:IsA("MeshPart") and child.Name:lower() == "trash can" then
 							connection2:Disconnect()
 							local now = tick()
@@ -4402,7 +4514,7 @@ do
 								return flag12
 							end)
 						end
-					end)
+					end)(...) end end)
 				end
 
 				if animationId:match("15128849047") then
@@ -4596,17 +4708,17 @@ do
 						part.Transparency = 1
 						local flag11 = false
 
-						local connection2 = part.Touched:Connect(function(hit)
+						local connection2 = part.Touched:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 								flag11 = true
 							end
-						end)
+						end)(...) end end)
 
-						local connection3 = part.TouchEnded:Connect(function(hit)
+						local connection3 = part.TouchEnded:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 								flag11 = false
 							end
-						end)
+						end)(...) end end)
 
 						local now = tick()
 
@@ -4755,7 +4867,7 @@ do
 				end
 
 				if animationId:match("16515850153") then
-					task.spawn(function()
+					spawnTracked(function()
 						local position = humanoidRootPart.Position
 
 						if (fn22() - position).Magnitude <= 15 then
@@ -4909,17 +5021,17 @@ do
 					part.Transparency = 1
 					local flag11 = false
 
-					local connection2 = part.Touched:Connect(function(hit)
+					local connection2 = part.Touched:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 							flag11 = true
 						end
-					end)
+					end)(...) end end)
 
-					local connection3 = part.TouchEnded:Connect(function(hit)
+					local connection3 = part.TouchEnded:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 							flag11 = false
 						end
-					end)
+					end)(...) end end)
 
 					local now = tick()
 
@@ -5022,17 +5134,17 @@ do
 						part.Transparency = 1
 						local flag11 = false
 
-						local connection2 = part.Touched:Connect(function(hit)
+						local connection2 = part.Touched:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 								flag11 = true
 							end
-						end)
+						end)(...) end end)
 
-						local connection3 = part.TouchEnded:Connect(function(hit)
+						local connection3 = part.TouchEnded:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 								flag11 = false
 							end
-						end)
+						end)(...) end end)
 
 						local now = tick()
 
@@ -5113,23 +5225,23 @@ do
 					part.CanCollide = false
 					part.Transparency = 1
 
-					task.delay(0.25, function()
+					delayTracked(0.25, function()
 						part.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 0, -part.Size.Z / 2)
 					end)
 
 					local flag11 = false
 
-					local connection2 = part.Touched:Connect(function(hit)
+					local connection2 = part.Touched:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 							flag11 = true
 						end
-					end)
+					end)(...) end end)
 
-					local connection3 = part.TouchEnded:Connect(function(hit)
+					local connection3 = part.TouchEnded:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 							flag11 = false
 						end
-					end)
+					end)(...) end end)
 
 					local now = tick()
 
@@ -5185,17 +5297,17 @@ do
 							part.CFrame = humanoidRootPart.CFrame * v4
 							table.insert(tbl6, part)
 
-							table.insert(tbl8, part.Touched:Connect(function(hit)
+							table.insert(tbl8, part.Touched:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 								if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 									flag11 = true
 								end
-							end))
+							end)(...) end end))
 
-							table.insert(tbl8, part.TouchEnded:Connect(function(hit)
+							table.insert(tbl8, part.TouchEnded:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 								if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 									flag11 = false
 								end
-							end))
+							end)(...) end end))
 						end
 
 						local now = tick()
@@ -5258,17 +5370,17 @@ do
 						table.insert(tbl6, part)
 						local v4 = i
 
-						table.insert(tbl9, part.Touched:Connect(function(hit)
+						table.insert(tbl9, part.Touched:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 								tbl8[v4] = true
 							end
-						end))
+						end)(...) end end))
 
-						table.insert(tbl9, part.TouchEnded:Connect(function(hit)
+						table.insert(tbl9, part.TouchEnded:Connect(function(...) if _StruglixSession:IsActive() then return (function(hit)
 							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
 								tbl8[v4] = false
 							end
-						end))
+						end)(...) end end))
 					end
 
 					local now = tick()
@@ -5304,7 +5416,7 @@ do
 					end
 				end
 			end)
-		end)
+		end)(...) end end)
 	end
 
 	local function fn18(arg)
@@ -5313,24 +5425,24 @@ do
 		end
 
 		if arg.Character then
-			task.spawn(fn17, arg, arg.Character)
+			spawnTracked(fn17, arg, arg.Character)
 		end
 
-		tbl5[arg] = arg.CharacterAdded:Connect(function(character)
-			task.spawn(fn17, arg, character)
-		end)
+		tbl5[arg] = arg.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
+			spawnTracked(fn17, arg, character)
+		end)(...) end end)
 	end
 
 	for _, player in pairs(Players:GetPlayers()) do
-		task.spawn(fn18, player)
+		spawnTracked(fn18, player)
 	end
 
-	Players.PlayerAdded:Connect(function(player)
+	Players.PlayerAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(player)
 		if player == localPlayer then
 			return
 		end
 
-		task.spawn(function()
+		spawnTracked(function()
 			local now = tick()
 
 			while true do
@@ -5343,17 +5455,17 @@ do
 
 			if player and player.Parent then
 				if player.Character then
-					task.spawn(fn17, player, player.Character)
+					spawnTracked(fn17, player, player.Character)
 				end
 
-				tbl5[player] = player.CharacterAdded:Connect(function(character)
-					task.spawn(fn17, player, character)
-				end)
+				tbl5[player] = player.CharacterAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(character)
+					spawnTracked(fn17, player, character)
+				end)(...) end end)
 			end
 		end)
-	end)
+	end)(...) end end)
 
-	Players.PlayerRemoving:Connect(function(player)
+	Players.PlayerRemoving:Connect(function(...) if _StruglixSession:IsActive() then return (function(player)
 		if tbl4[player] then
 			pcall(function()
 				tbl4[player]:Disconnect()
@@ -5369,7 +5481,7 @@ do
 
 			tbl5[player] = nil
 		end
-	end)
+	end)(...) end end)
 
 	local function fn19()
 		local character = localPlayer.Character
@@ -5500,7 +5612,7 @@ do
 
 		local flag11 = false
 
-		RunService.Heartbeat:Connect(function()
+		RunService.Heartbeat:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			if not flag3 then
 				return
 			end
@@ -5671,7 +5783,7 @@ do
 			end
 
 			flag11 = false
-		end)
+		end)(...) end end)
 	end
 
 	local function fn21(arg, arg2, arg3)
@@ -5685,7 +5797,7 @@ do
 		local now = nil
 		v2 = fn7()
 
-		RunService.Heartbeat:Connect(function()
+		RunService.Heartbeat:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			if not flag3 then
 				if flag4 then
 					flag4 = false
@@ -5722,7 +5834,7 @@ do
 					fn19()
 					flag7 = true
 
-					task.spawn(function()
+					spawnTracked(function()
 						local now2 = tick()
 
 						while true do
@@ -5862,19 +5974,19 @@ do
 			if sethiddenproperty then
 				sethiddenproperty(humanoidRootPart2, "PhysicsRepRootPart", humanoidRootPart)
 			end
-		end)
+		end)(...) end end)
 	end
 
 	local function fn23()
 		local VirtualUser = game:GetService("VirtualUser")
 
-		localPlayer.Idled:Connect(function()
+		localPlayer.Idled:Connect(function(...) if _StruglixSession:IsActive() then return (function()
 			VirtualUser:CaptureController()
 			VirtualUser:ClickButton2(Vector2.new())
-		end)
+		end)(...) end end)
 	end
 
-	task.spawn(function()
+	spawnTracked(function()
 		while true do
 			local character = localPlayer.Character
 			local attribute = character and character:GetAttribute("Character")
@@ -5888,21 +6000,21 @@ do
 		end
 	end)
 
-	task.spawn(function()
+	spawnTracked(function()
 		local thrown = workspace:FindFirstChild("Thrown")
 
 		if thrown then
 			for _, child in pairs(thrown:GetChildren()) do
 				if child.Name:lower():find("debris") or child.Name:lower() == "part" then
-					task.spawn(pcall, _deleteNew, child)
+					spawnTracked(pcall, _deleteNew, child)
 				end
 			end
 
-			thrown.ChildAdded:Connect(function(child)
+			thrown.ChildAdded:Connect(function(...) if _StruglixSession:IsActive() then return (function(child)
 				if child.Name:lower():find("debris") or child.Name:lower() == "part" then
-					task.spawn(pcall, _deleteNew, child)
+					spawnTracked(pcall, _deleteNew, child)
 				end
-			end)
+			end)(...) end end)
 		end
 	end)
 
@@ -5912,7 +6024,7 @@ do
 	fn23()
 end
 
-task.spawn(function()
+spawnTracked(function()
 	task.wait(1)
 
 	while true do
@@ -5923,7 +6035,7 @@ task.spawn(function()
 	end
 end)
 
-task.spawn(function()
+spawnTracked(function()
 	while true do
 		if getgenv().desync then
 			local now = tick()
@@ -5939,7 +6051,7 @@ task.spawn(function()
 	end
 end)
 
-task.spawn(function()
+spawnTracked(function()
 	while task.wait(0.25) do
 		local character = localPlayer.Character
 		local communicate = character and character:FindFirstChild("Communicate")
@@ -5950,9 +6062,9 @@ task.spawn(function()
 	end
 end)
 
-task.spawn(function()
+spawnTracked(function()
 	while true do
-		if (#Players:GetPlayers() <= 7 or n8 >= 7) and not flag6 and not flag8 then
+		if (#Players:GetPlayers() <= 5 or n8 >= 7) and not flag6 and not flag8 then
 			doHopServer()
 		end
 
