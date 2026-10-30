@@ -1160,7 +1160,7 @@ do
 	doServerHop = getgenv().DoServerHop
 
 	if doServerHop == nil then
-		doServerHop = false
+		doServerHop = true
 	end
 
 	local function fn6(arg)
@@ -6134,13 +6134,12 @@ spawnTracked(function()
 		local timeSinceJoin = tick() - joinTime
 		local shouldHop = false
 
-		if doServerHop and (timeSinceJoin >= HOP_INTERVAL or n8 >= 7) then
+		if doServerHop and timeSinceJoin >= HOP_INTERVAL then
 			shouldHop = true
 		end
 
 		if shouldHop and not flag6 and not flag8 then
-			local reason = timeSinceJoin >= HOP_INTERVAL and "15-minute timer reached" or "7 ults reached"
-			print(string.format("[Struglix] Auto server hop triggered: %s (Time in server: %.1f mins, Ulted: %d)", reason, timeSinceJoin / 60, n8))
+			print(string.format("[Struglix] Auto server hop triggered: 15-minute timer reached (%.1f mins in server)", timeSinceJoin / 60))
 			doHopServer()
 		end
 	end
